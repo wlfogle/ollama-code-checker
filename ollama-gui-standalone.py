@@ -709,13 +709,21 @@ class OllamaCodeCheckerGUI:
                 # Read file content
                 try:
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()[:5000]  # Limit content size
+                        content = f.read()[:8000]  # Increase limit for better analysis
+                    
+                    if not content.strip():
+                        self.append_output(f"⚠️ Skipping empty file: {os.path.basename(file_path)}\n\n")
+                        continue
+                        
                 except Exception as e:
                     self.append_output(f"❌ Error reading file: {e}\n\n")
                     continue
                 
                 # Create analysis prompt
                 prompt = self.create_analysis_prompt(file_path, content, analysis_type)
+                
+                # Debug: Show content size
+                self.append_output(f"   Content size: {len(content)} chars\n")
                 
                 # Run Ollama analysis
                 try:
@@ -771,7 +779,15 @@ class OllamaCodeCheckerGUI:
         }
         language = language_map.get(file_ext, 'Unknown')
         
-        base_prompt = f"You are a code analysis expert. I need you to analyze this {language} code and provide specific feedback.\n\nFILE: {os.path.basename(file_path)}\nCODE:\n```{language.lower()}\n{content}\n```\n\n"
+        # Ensure content is properly formatted in the prompt
+        base_prompt = f"""Analyze this {language} code file: {os.path.basename(file_path)}
+
+CODE TO ANALYZE:
+```{language.lower()}
+{content}
+```
+
+"""
         
         if analysis_type == "cleanup":
             return base_prompt + """TASK: Code Cleanup Analysis
@@ -1020,7 +1036,7 @@ Provide your analysis in a clear, structured format with specific, actionable fe
         
         base_prompt = f"""Fix the issues in this {language} code file: {os.path.basename(file_path)}
 
-Original code:
+ORIGINAL CODE TO FIX:
 ```{language.lower()}
 {content}
 ```
@@ -1032,7 +1048,7 @@ Please:
 4. Fix code style issues
 5. Improve performance where possible
 
-Return ONLY the fixed code wrapped in ```{language.lower()} code blocks. Do not include explanations or other text."""
+IMPORTANT: Return ONLY the fixed code wrapped in ```{language.lower()} code blocks. Do not include explanations or other text."""
         
         return base_prompt
     
