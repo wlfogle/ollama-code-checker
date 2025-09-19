@@ -6,6 +6,8 @@ import subprocess
 import threading
 import os
 from pathlib import Path
+import json
+import datetime
 
 class OllamaCodeCheckerGUI:
     def __init__(self, root):
@@ -22,6 +24,7 @@ class OllamaCodeCheckerGUI:
         self.analyzed_files = []  # Store files from last analysis
         self.last_analysis_target = None
         self.last_analysis_type = None
+        self.git_info = {}  # Store git repository information
         
         self.setup_ui()
         self.load_available_models()
@@ -36,7 +39,7 @@ class OllamaCodeCheckerGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(5, weight=1)
+        main_frame.rowconfigure(6, weight=1)
         
         # Title
         title_label = ttk.Label(main_frame, text="🤖 Ollama Code Analysis Tool", 
@@ -74,7 +77,7 @@ class OllamaCodeCheckerGUI:
         target_frame.grid(row=3, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
         target_frame.columnconfigure(0, weight=1)
         
-        self.target_var = tk.StringVar(value="/home/garuda/disability-app-tauri")
+        self.target_var = tk.StringVar(value="/home/garuda/nexus-terminal")
         self.target_entry = ttk.Entry(target_frame, textvariable=self.target_var, font=('Arial', 9))
         self.target_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 10))
         
@@ -88,9 +91,26 @@ class OllamaCodeCheckerGUI:
         ttk.Button(target_frame, text="🤖 Auto-Select Model", 
                   command=self.auto_select_model).grid(row=0, column=3, padx=(5, 0))
         
+        # Git info section
+        git_frame = ttk.LabelFrame(main_frame, text="📋 Repository Info", padding="5")
+        git_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 5))
+        git_frame.columnconfigure(1, weight=1)
+        
+        self.git_status_var = tk.StringVar(value="No repository selected")
+        git_status_label = ttk.Label(git_frame, textvariable=self.git_status_var, 
+                                    font=('Arial', 9), foreground='gray')
+        git_status_label.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E))
+        
+        ttk.Button(git_frame, text="📊 Git Status", 
+                  command=self.show_git_status).grid(row=1, column=0, padx=(0, 5))
+        ttk.Button(git_frame, text="📝 Recent Changes", 
+                  command=self.show_recent_changes).grid(row=1, column=1, padx=5)
+        ttk.Button(git_frame, text="🌿 Branch Info", 
+                  command=self.show_branch_info).grid(row=1, column=2, padx=(5, 0))
+        
         # Control buttons
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=4, column=0, columnspan=3, pady=20)
+        button_frame.grid(row=5, column=0, columnspan=3, pady=20)
         
         self.analyze_button = ttk.Button(button_frame, text="🚀 Start Analysis", 
                                         command=self.start_analysis, 
@@ -123,24 +143,29 @@ class OllamaCodeCheckerGUI:
         
         # Output area
         output_frame = ttk.LabelFrame(main_frame, text="📊 Analysis Output", padding="5")
-        output_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        output_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
         
         self.output_text = scrolledtext.ScrolledText(output_frame, wrap=tk.WORD, 
-                                                    height=25, state=tk.DISABLED,
+                                                    height=25, state=tk.NORMAL,
                                                     font=('Consolas', 9))
         self.output_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
+        # Make text selectable but prevent editing except for copy operations
+        self.output_text.bind('<Key>', self.on_key_press)
+        # Allow right-click context menu for copy
+        self.output_text.bind('<Button-3>', self.show_context_menu)
+        
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
+        self.progress.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Status bar
         self.status_var = tk.StringVar(value="Ready - Select model and target, then click Start Analysis")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, 
                               font=('Arial', 9))
-        status_bar.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(5, 0))
+        status_bar.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(5, 0))
     
     def start_ollama_service(self):
         """Start Ollama service in background"""
@@ -209,7 +234,8 @@ class OllamaCodeCheckerGUI:
         directory = filedialog.askdirectory(initialdir=self.target_var.get())
         if directory:
             self.target_var.set(directory)
-            # Auto-suggest model when directory is selected
+            # Update git info and auto-suggest model when directory is selected
+            self.update_git_info(directory)
             self.auto_select_model()
     
     def browse_file(self):
@@ -223,22 +249,273 @@ class OllamaCodeCheckerGUI:
         )
         if file_path:
             self.target_var.set(file_path)
-            # Auto-suggest model when file is selected
+            # Update git info and auto-suggest model when file is selected
+            self.update_git_info(os.path.dirname(file_path))
             self.auto_select_model()
+    
+    def on_key_press(self, event):
+        """Handle key presses - allow copy operations but prevent editing"""
+        # Allow Ctrl+C (copy) and Ctrl+A (select all)
+        if event.state & 0x4:  # Ctrl key pressed
+            if event.keysym.lower() in ['c', 'a']:
+                return None  # Allow the operation
+        
+        # Allow arrow keys, Page Up/Down, Home, End for navigation
+        if event.keysym in ['Up', 'Down', 'Left', 'Right', 'Prior', 'Next', 'Home', 'End']:
+            return None
+        
+        # Block all other key presses to prevent editing
+        return 'break'
+    
+    def show_context_menu(self, event):
+        """Show context menu with copy option"""
+        try:
+            context_menu = tk.Menu(self.root, tearoff=0)
+            context_menu.add_command(label="Copy", command=self.copy_selection)
+            context_menu.add_command(label="Select All", command=self.select_all)
+            context_menu.tk_popup(event.x_root, event.y_root)
+        except:
+            pass
+    
+    def copy_selection(self):
+        """Copy selected text to clipboard"""
+        try:
+            self.root.clipboard_clear()
+            selected_text = self.output_text.selection_get()
+            self.root.clipboard_append(selected_text)
+        except tk.TclError:
+            pass  # No selection
+    
+    def select_all(self):
+        """Select all text in output area"""
+        self.output_text.tag_add(tk.SEL, "1.0", tk.END)
+        self.output_text.mark_set(tk.INSERT, "1.0")
+        self.output_text.see(tk.INSERT)
+    
+    def update_git_info(self, path):
+        """Update git repository information"""
+        if not path or not os.path.exists(path):
+            return
+        
+        # Find git root
+        git_root = self.find_git_root(path)
+        if not git_root:
+            self.git_status_var.set("❌ Not a git repository")
+            self.git_info = {}
+            return
+        
+        try:
+            # Get basic git info
+            branch = self.run_git_command(git_root, ['branch', '--show-current']).strip()
+            status = self.run_git_command(git_root, ['status', '--porcelain'])
+            
+            # Count changes
+            modified_files = len([line for line in status.split('\n') if line.strip()])
+            
+            # Get last commit info
+            try:
+                last_commit = self.run_git_command(git_root, ['log', '-1', '--pretty=format:%h - %s (%cr)'])
+            except:
+                last_commit = "No commits"
+            
+            self.git_info = {
+                'root': git_root,
+                'branch': branch or 'detached HEAD',
+                'status': status,
+                'modified_files': modified_files,
+                'last_commit': last_commit
+            }
+            
+            # Update status display
+            status_text = f"🌿 Branch: {self.git_info['branch']}"
+            if modified_files > 0:
+                status_text += f" | ⚠️ {modified_files} changes"
+            else:
+                status_text += f" | ✅ Clean"
+            
+            self.git_status_var.set(status_text)
+            
+        except Exception as e:
+            self.git_status_var.set(f"❌ Git error: {str(e)}")
+            self.git_info = {}
+    
+    def find_git_root(self, path):
+        """Find the root of a git repository"""
+        current_path = Path(path).resolve()
+        
+        while current_path != current_path.parent:
+            if (current_path / '.git').exists():
+                return str(current_path)
+            current_path = current_path.parent
+        
+        return None
+    
+    def run_git_command(self, cwd, args):
+        """Run a git command in the specified directory"""
+        result = subprocess.run(
+            ['git'] + args,
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            raise Exception(f"Git command failed: {result.stderr}")
+        return result.stdout
+    
+    def show_git_status(self):
+        """Show detailed git status"""
+        if not self.git_info:
+            messagebox.showinfo("Git Status", "No git repository information available.")
+            return
+        
+        try:
+            # Get detailed status
+            status = self.run_git_command(self.git_info['root'], ['status', '--porcelain', '-v'])
+            branch_info = self.run_git_command(self.git_info['root'], ['branch', '-vv'])
+            
+            self.clear_output()
+            self.append_output("📊 Git Repository Status\n")
+            self.append_output("=" * 50 + "\n")
+            self.append_output(f"📁 Repository: {os.path.basename(self.git_info['root'])}\n")
+            self.append_output(f"🌿 Current Branch: {self.git_info['branch']}\n")
+            self.append_output(f"📝 Last Commit: {self.git_info['last_commit']}\n\n")
+            
+            if status.strip():
+                self.append_output("📋 File Changes:\n")
+                self.append_output("-" * 30 + "\n")
+                for line in status.strip().split('\n'):
+                    if line.strip():
+                        status_code = line[:2]
+                        filename = line[3:]
+                        emoji = self.get_status_emoji(status_code)
+                        self.append_output(f"{emoji} {status_code} {filename}\n")
+            else:
+                self.append_output("✅ Working directory clean\n")
+            
+            self.append_output("\n" + "=" * 50 + "\n")
+            
+        except Exception as e:
+            messagebox.showerror("Git Error", f"Failed to get git status: {str(e)}")
+    
+    def show_recent_changes(self):
+        """Show recent git commits and changes"""
+        if not self.git_info:
+            messagebox.showinfo("Recent Changes", "No git repository information available.")
+            return
+        
+        try:
+            # Get recent commits
+            commits = self.run_git_command(self.git_info['root'], 
+                ['log', '--oneline', '-10', '--pretty=format:%h|%cr|%s'])
+            
+            # Get recently changed files
+            changed_files = self.run_git_command(self.git_info['root'], 
+                ['diff', '--name-status', 'HEAD~5..HEAD'])
+            
+            self.clear_output()
+            self.append_output("📝 Recent Changes Analysis\n")
+            self.append_output("=" * 50 + "\n\n")
+            
+            self.append_output("🕒 Recent Commits (Last 10):\n")
+            self.append_output("-" * 40 + "\n")
+            for commit in commits.strip().split('\n'):
+                if '|' in commit:
+                    hash_part, time_part, message = commit.split('|', 2)
+                    self.append_output(f"• {hash_part} ({time_part}) - {message}\n")
+            
+            if changed_files.strip():
+                self.append_output("\n📁 Files Changed in Last 5 Commits:\n")
+                self.append_output("-" * 40 + "\n")
+                for line in changed_files.strip().split('\n'):
+                    if line.strip():
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            status, filename = parts[0], parts[1]
+                            emoji = self.get_status_emoji(status)
+                            self.append_output(f"{emoji} {status} {filename}\n")
+            
+            self.append_output("\n" + "=" * 50 + "\n")
+            
+        except Exception as e:
+            messagebox.showerror("Git Error", f"Failed to get recent changes: {str(e)}")
+    
+    def show_branch_info(self):
+        """Show git branch information and repository stats"""
+        if not self.git_info:
+            messagebox.showinfo("Branch Info", "No git repository information available.")
+            return
+        
+        try:
+            # Get branch info
+            branches = self.run_git_command(self.git_info['root'], ['branch', '-a'])
+            remotes = self.run_git_command(self.git_info['root'], ['remote', '-v'])
+            
+            # Get repository stats
+            total_commits = self.run_git_command(self.git_info['root'], ['rev-list', '--count', 'HEAD']).strip()
+            contributors = self.run_git_command(self.git_info['root'], 
+                ['shortlog', '-sn', '--all']).strip().split('\n')[:5]
+            
+            self.clear_output()
+            self.append_output("🌿 Git Branch & Repository Info\n")
+            self.append_output("=" * 50 + "\n\n")
+            
+            self.append_output(f"📊 Repository Stats:\n")
+            self.append_output(f"• Total Commits: {total_commits}\n")
+            self.append_output(f"• Current Branch: {self.git_info['branch']}\n")
+            self.append_output(f"• Repository Root: {self.git_info['root']}\n\n")
+            
+            self.append_output("🌿 All Branches:\n")
+            self.append_output("-" * 30 + "\n")
+            for branch in branches.strip().split('\n'):
+                if branch.strip():
+                    if branch.startswith('* '):
+                        self.append_output(f"→ {branch[2:]} (current)\n")
+                    else:
+                        self.append_output(f"  {branch.strip()}\n")
+            
+            if remotes.strip():
+                self.append_output("\n🔗 Remotes:\n")
+                self.append_output("-" * 30 + "\n")
+                for remote in remotes.strip().split('\n'):
+                    self.append_output(f"• {remote}\n")
+            
+            if contributors:
+                self.append_output("\n👥 Top Contributors:\n")
+                self.append_output("-" * 30 + "\n")
+                for contributor in contributors[:5]:
+                    if contributor.strip():
+                        self.append_output(f"• {contributor}\n")
+            
+            self.append_output("\n" + "=" * 50 + "\n")
+            
+        except Exception as e:
+            messagebox.showerror("Git Error", f"Failed to get branch info: {str(e)}")
+    
+    def get_status_emoji(self, status_code):
+        """Get emoji for git status codes"""
+        status_map = {
+            'M': '📝',   # Modified
+            'A': '➕',   # Added
+            'D': '❌',   # Deleted
+            'R': '🔄',   # Renamed
+            'C': '📋',   # Copied
+            'U': '⚠️',   # Unmerged
+            '?': '❓',   # Untracked
+            '!': '🚫'    # Ignored
+        }
+        return status_map.get(status_code.strip(), '📄')
     
     def append_output(self, text):
         """Append text to output area"""
-        self.output_text.config(state=tk.NORMAL)
+        # Text is always in NORMAL state for selection, just insert and scroll
         self.output_text.insert(tk.END, text)
         self.output_text.see(tk.END)
-        self.output_text.config(state=tk.DISABLED)
         self.root.update_idletasks()
     
     def clear_output(self):
         """Clear output area"""
-        self.output_text.config(state=tk.NORMAL)
+        # Text is always in NORMAL state, just delete content
         self.output_text.delete(1.0, tk.END)
-        self.output_text.config(state=tk.DISABLED)
     
     def save_report(self):
         """Save analysis report to file"""
@@ -461,10 +738,12 @@ class OllamaCodeCheckerGUI:
         }
         language = language_map.get(file_ext, 'Unknown')
         
-        base_prompt = f"Analyze this {language} code file: {os.path.basename(file_path)}\n\n{content}\n\n"
+        base_prompt = f"You are a code analysis expert. I need you to analyze this {language} code and provide specific feedback.\n\nFILE: {os.path.basename(file_path)}\nCODE:\n```{language.lower()}\n{content}\n```\n\n"
         
         if analysis_type == "cleanup":
-            return base_prompt + """Please identify:
+            return base_prompt + """TASK: Code Cleanup Analysis
+
+Please analyze the code above and identify:
 1. Stub functions (empty or placeholder implementations)
 2. Unused functions, variables, and imports
 3. Dead code that's never called
@@ -472,46 +751,100 @@ class OllamaCodeCheckerGUI:
 5. Redundant or duplicate code
 6. Empty catch blocks or TODO comments
 
-For each finding, specify line numbers and whether it's safe to remove."""
+For each finding, specify:
+- Line numbers where the issue occurs
+- Description of the problem
+- Whether it's safe to remove
+
+Provide your analysis in a clear, structured format."""
             
         elif analysis_type == "errors":
-            return base_prompt + """Please identify:
+            return base_prompt + """TASK: Error and Bug Detection
+
+Please analyze the code above and identify:
 1. Syntax errors
 2. Type errors
 3. Logic issues
 4. Potential runtime errors
-5. Missing imports or dependencies"""
+5. Missing imports or dependencies
+
+For each issue found, provide:
+- Line numbers where the error occurs
+- Description of the problem
+- Suggested fix
+
+Provide your analysis in a clear, structured format."""
             
         elif analysis_type == "security":
-            return base_prompt + """Please identify:
+            return base_prompt + """TASK: Security Analysis
+
+Please analyze the code above and identify:
 1. Security vulnerabilities
 2. Unsafe operations
 3. Input validation issues
 4. Authentication problems
-5. Data exposure risks"""
+5. Data exposure risks
+
+For each security issue found, provide:
+- Line numbers where the vulnerability occurs
+- Description of the security risk
+- Severity level (High/Medium/Low)
+- Recommended fix
+
+Provide your analysis in a clear, structured format."""
             
         elif analysis_type == "performance":
-            return base_prompt + """Please identify:
+            return base_prompt + """TASK: Performance Analysis
+
+Please analyze the code above and identify:
 1. Performance bottlenecks
 2. Inefficient algorithms
 3. Memory usage issues
-4. I/O optimization opportunities"""
+4. I/O optimization opportunities
+
+For each performance issue found, provide:
+- Line numbers where the issue occurs
+- Description of the performance problem
+- Impact level (High/Medium/Low)
+- Suggested optimization
+
+Provide your analysis in a clear, structured format."""
             
         elif analysis_type == "style":
-            return base_prompt + """Please review:
+            return base_prompt + """TASK: Code Style Review
+
+Please review the code above for:
 1. Code formatting and indentation
 2. Naming conventions
 3. Code organization
 4. Documentation quality
-5. Best practice compliance"""
+5. Best practice compliance
+
+For each style issue found, provide:
+- Line numbers where the issue occurs
+- Description of the style problem
+- Recommended improvement
+
+Provide your analysis in a clear, structured format."""
             
         else:  # all
-            return base_prompt + """Please provide comprehensive analysis covering:
+            return base_prompt + """TASK: Comprehensive Code Analysis
+
+Please provide a thorough analysis of the code above covering:
 1. Errors and bugs
 2. Code style and best practices
 3. Security considerations
 4. Performance opportunities
-5. Code cleanup (stub/unused code)"""
+5. Code cleanup (stub/unused code)
+
+For each issue found, provide:
+- Category (Error/Style/Security/Performance/Cleanup)
+- Line numbers where the issue occurs
+- Description of the problem
+- Recommended fix or improvement
+- Priority level (High/Medium/Low)
+
+Provide your analysis in a clear, structured format with specific, actionable feedback."""
     
     def run_autofix_analysis(self):
         """Run analysis with auto-fix capability"""
