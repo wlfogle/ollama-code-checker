@@ -94,19 +94,24 @@ class OllamaCodeCheckerGUI:
         # Git info section
         git_frame = ttk.LabelFrame(main_frame, text="📋 Repository Info", padding="5")
         git_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 5))
+        git_frame.columnconfigure(0, weight=1)
         git_frame.columnconfigure(1, weight=1)
+        git_frame.columnconfigure(2, weight=1)
+        git_frame.columnconfigure(3, weight=1)
         
         self.git_status_var = tk.StringVar(value="No repository selected")
         git_status_label = ttk.Label(git_frame, textvariable=self.git_status_var, 
                                     font=('Arial', 9), foreground='gray')
         git_status_label.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E))
         
+        ttk.Button(git_frame, text="📁 Browse Repo", 
+                  command=self.browse_repository).grid(row=1, column=0, padx=(0, 5))
         ttk.Button(git_frame, text="📊 Git Status", 
-                  command=self.show_git_status).grid(row=1, column=0, padx=(0, 5))
+                  command=self.show_git_status).grid(row=1, column=1, padx=5)
         ttk.Button(git_frame, text="📝 Recent Changes", 
-                  command=self.show_recent_changes).grid(row=1, column=1, padx=5)
+                  command=self.show_recent_changes).grid(row=1, column=2, padx=5)
         ttk.Button(git_frame, text="🌿 Branch Info", 
-                  command=self.show_branch_info).grid(row=1, column=2, padx=(5, 0))
+                  command=self.show_branch_info).grid(row=1, column=3, padx=(5, 0))
         
         # Control buttons
         button_frame = ttk.Frame(main_frame)
@@ -252,6 +257,34 @@ class OllamaCodeCheckerGUI:
             # Update git info and auto-suggest model when file is selected
             self.update_git_info(os.path.dirname(file_path))
             self.auto_select_model()
+    
+    def browse_repository(self):
+        """Browse specifically for git repositories"""
+        directory = filedialog.askdirectory(
+            title="Select Git Repository",
+            initialdir=self.target_var.get() or os.path.expanduser("~")
+        )
+        if directory:
+            # Check if it's a git repository
+            git_root = self.find_git_root(directory)
+            if git_root:
+                self.target_var.set(git_root)
+                self.update_git_info(git_root)
+                self.auto_select_model()
+                self.status_var.set(f"Repository selected: {os.path.basename(git_root)}")
+            else:
+                # Ask if user wants to select it anyway
+                result = messagebox.askyesno(
+                    "Not a Git Repository",
+                    f"The selected directory is not a git repository.\n\n"
+                    f"Do you want to select it anyway for analysis?"
+                )
+                if result:
+                    self.target_var.set(directory)
+                    self.git_status_var.set("❌ Not a git repository")
+                    self.auto_select_model()
+                else:
+                    self.status_var.set("Repository selection cancelled")
     
     def on_key_press(self, event):
         """Handle key presses - allow copy operations but prevent editing"""
