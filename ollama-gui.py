@@ -115,29 +115,55 @@ class OllamaCodeCheckerGUI:
     
     def load_available_models(self):
         """Load available Ollama models"""
+        models_path = '/run/media/garuda/73cf9511-0af0-4ac4-9d83-ee21eb17ff5d/models'
+        
         try:
-            # Set environment variable for models path
-            env = os.environ.copy()
-            env['OLLAMA_MODELS'] = '/run/media/garuda/73cf9511-0af0-4ac4-9d83-ee21eb17ff5d/models'
+            # Try to get models from manifest directory first (more reliable)
+            manifest_path = f"{models_path}/manifests/registry.ollama.ai/library"
+            if os.path.exists(manifest_path):
+                model_dirs = [d for d in os.listdir(manifest_path) 
+                             if os.path.isdir(os.path.join(manifest_path, d))]
+                
+                if model_dirs:
+                    # Add :latest suffix to model names
+                    available_models = [f"{model}:latest" for model in sorted(model_dirs)]
+                    self.model_combo['values'] = available_models
+                    
+                    # Set default to a code model if available
+                    code_models = [m for m in available_models if any(x in m.lower() 
+                                  for x in ['code', 'granite', 'deepseek'])]
+                    if code_models:
+                        self.model_var.set(code_models[0])
+                    else:
+                        self.model_var.set(available_models[0])
+                    return
             
-            result = subprocess.run(['ollama', 'list'], capture_output=True, text=True, env=env)
-            if result.returncode == 0:
+            # Fallback: try ollama list command
+            env = os.environ.copy()
+            env['OLLAMA_MODELS'] = models_path
+            
+            result = subprocess.run(['ollama', 'list'], capture_output=True, text=True, env=env, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
                 lines = result.stdout.strip().split('\n')[1:]  # Skip header
-                models = [line.split()[0] for line in lines if line.strip()]
+                models = [line.split()[0] for line in lines if line.strip() and 'NAME' not in line]
                 if models:
                     self.model_combo['values'] = models
-                    # Set default to a code model if available
                     code_models = [m for m in models if any(x in m.lower() 
                                   for x in ['code', 'granite', 'deepseek'])]
                     if code_models:
                         self.model_var.set(code_models[0])
-                else:
-                    self.model_combo['values'] = ['granite-code:latest', 'deepseek-coder-v2:latest']
-            else:
-                self.model_combo['values'] = ['granite-code:latest', 'deepseek-coder-v2:latest']
+                    return
+                        
         except Exception as e:
-            self.append_output(f"Warning: Could not load models list: {e}\n")
-            self.model_combo['values'] = ['granite-code:latest', 'deepseek-coder-v2:latest']
+            print(f"Warning: Could not load models list: {e}")
+        
+        # Final fallback: use common model names
+        fallback_models = [
+            'granite-code:latest', 'deepseek-coder-v2:latest', 'qwen2.5-coder:latest',
+            'codellama:latest', 'codegemma:latest', 'llama3.1:latest'
+        ]
+        self.model_combo['values'] = fallback_models
+        self.model_var.set('granite-code:latest')
     
     def browse_directory(self):
         """Browse for directory"""

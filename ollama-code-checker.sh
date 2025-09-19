@@ -41,6 +41,7 @@ OPTIONS:
     -e, --extensions EXT    File extensions to analyze (comma-separated)
     -r, --recursive         Analyze recursively (default)
     -f, --file FILE         Analyze single file
+    --limit LIMIT           Maximum files to process (default: unlimited)
     -c, --config            Show current configuration
     -l, --list-models       List available models
     -i, --interactive       Interactive mode (default if no args)
@@ -165,12 +166,21 @@ list_available_models() {
             echo -e "${YELLOW}Other Available Models:${NC}"
             ls "$MODELS_PATH/manifests/registry.ollama.ai/library/" 2>/dev/null | grep -vE "(code|granite|deepseek)" | while read -r model_name; do
                 echo -e "  $model_name:latest"
-            done
         else
             echo -e "${YELLOW}No models manifest found. You may need to pull some models first.${NC}"
         fi
     else
         echo "$models" | while read -r model; do
+            if [[ "$model" == *"code"* ]] || [[ "$model" == *"granite"* ]] || [[ "$model" == *"deepseek"* ]]; then
+                echo -e "${GREEN}● $model${NC} (recommended for code analysis)"
+            else
+                echo -e "  $model"
+            fi
+        done
+    fi
+    echo
+    return 0
+}
             if [[ "$model" == *"code"* ]] || [[ "$model" == *"granite"* ]] || [[ "$model" == *"deepseek"* ]]; then
                 echo -e "${GREEN}● $model${NC} (recommended for code analysis)"
             else
@@ -392,13 +402,34 @@ analyze_directory() {
         find_cmd="$find_cmd \( $ext_filter \)"
     fi
     
-    # Execute find and analyze files
-    local files=$(eval "$find_cmd" 2>/dev/null | head -20)  # Limit to 20 files
+    # Execute find and analyze files (exclude common build/dependency directories)
+    find_cmd="$find_cmd -not -path '*/node_modules/*' -not -path '*/target/*' -not -path '*/build/*' -not -path '*/dist/*' -not -path '*/.git/*' -not -path '*/__pycache__/*'"
+    local files=$(eval "$find_cmd" 2>/dev/null)
     local file_count=$(echo "$files" | wc -l)
     
     if [[ -z "$files" ]]; then
         echo -e "${YELLOW}No files found matching criteria.${NC}"
         return 1
+    fi
+    
+    # Apply file limit if specified
+    if [[ -n "$FILE_LIMIT" && "$FILE_LIMIT" -gt 0 ]]; then
+        if [[ $file_count -gt $FILE_LIMIT ]]; then
+            echo -e "${YELLOW}Warning: Found $file_count files, limiting to $FILE_LIMIT${NC}"
+            files=$(echo "$files" | head -n "$FILE_LIMIT")
+            file_count="$FILE_LIMIT"
+        fi
+    fi
+    
+    # Show warning for large codebases
+    if [[ $file_count -gt 100 ]]; then
+        echo -e "${YELLOW}⚠️  Large codebase detected: $file_count files${NC}"
+        echo -e "${YELLOW}This analysis may take a long time. Consider using --limit to process fewer files.${NC}"
+        read -p "Continue with all $file_count files? [y/N]: " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            echo -e "${CYAN}Analysis cancelled. Use --limit option to analyze fewer files.${NC}"
+            return 1
+        fi
     fi
     
     echo -e "${GREEN}Found $file_count files to analyze${NC}"
