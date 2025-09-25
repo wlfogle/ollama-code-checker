@@ -682,9 +682,9 @@ class OllamaCodeCheckerGUI:
                     for file in files:
                         if any(file.endswith(ext) for ext in extensions):
                             file_path = os.path.join(root, file)
-                            # Skip very large files (>50KB)
+                            # Skip very large files (>100KB for better analysis)
                             try:
-                                if os.path.getsize(file_path) < 50000:  # 50KB limit
+                                if os.path.getsize(file_path) < 100000:  # 100KB limit
                                     files_to_analyze.append(file_path)
                             except OSError:
                                 pass  # Skip if can't get file size
@@ -709,7 +709,7 @@ class OllamaCodeCheckerGUI:
                 # Read file content
                 try:
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()[:8000]  # Increase limit for better analysis
+                        content = f.read()[:15000]  # Increase limit for better analysis
                     
                     if not content.strip():
                         self.append_output(f"⚠️ Skipping empty file: {os.path.basename(file_path)}\n\n")
@@ -736,16 +736,85 @@ class OllamaCodeCheckerGUI:
                         env=env
                     )
                     
-                    stdout, _ = self.current_process.communicate(input=prompt, timeout=180)
+                    stdout, _ = self.current_process.communicate(input=prompt, timeout=300)
                     
                     if stdout:
                         # Clean up terminal control sequences
                         clean_output = self.clean_terminal_output(stdout)
-                        if clean_output.strip():  # Only show if there's actual content
+                        
+                        # Check for common unhelpful responses
+                        unhelpful_phrases = [
+                            "i don't have access",
+                            "i cannot access",
+                            "i'm unable to see",
+                            "i can't see the code",
+                            "no code provided",
+                            "code is not provided",
+                            "i need to see the code",
+                            "i need more information",
+                            "please provide",
+                            "provide me with",
+                            "i'd be happy to help",
+                            "sure, i can analyze",
+                            "please provide the file",
+                            "provide more context",
+                            "it appears to be incomplete",
+                            "cannot provide a detailed analysis",
+                            "// your comprehensive code analysis goes here"
+                        ]
+                        
+                        is_unhelpful = any(phrase in clean_output.lower() for phrase in unhelpful_phrases)
+                        
+                        if clean_output.strip() and not is_unhelpful:
                             self.append_output(f"✅ Results for {os.path.basename(file_path)}:\n")
                             self.append_output("-" * 40 + "\n")
                             self.append_output(clean_output)
                             self.append_output("\n" + "=" * 50 + "\n\n")
+                        elif is_unhelpful:
+                            self.append_output(f"🔄 Retrying analysis for {os.path.basename(file_path)} with simplified prompt...\n")
+                            # Retry with a more direct prompt
+                            file_ext = os.path.splitext(file_path)[1]
+                            lang_name = {
+                                '.py': 'Python', '.cpp': 'C++', '.h': 'C++', '.c': 'C',
+                                '.js': 'JavaScript', '.ts': 'TypeScript', '.rs': 'Rust',
+                                '.go': 'Go', '.java': 'Java'
+                            }.get(file_ext, 'code')
+                            
+                            retry_prompt = f"""Here is {lang_name} code to analyze:
+
+{content}
+
+Analyze this code and identify any:
+- Errors or bugs
+- Style issues
+- Security problems
+- Performance issues
+- Code that needs cleanup
+
+Be specific about what you find."""
+                            try:
+                                retry_process = subprocess.Popen(
+                                    ['ollama', 'run', model],
+                                    stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT,
+                                    text=True,
+                                    env=env
+                                )
+                                retry_stdout, _ = retry_process.communicate(input=retry_prompt, timeout=300)
+                                if retry_stdout:
+                                    retry_output = self.clean_terminal_output(retry_stdout)
+                                    if retry_output.strip():
+                                        self.append_output(f"✅ Results for {os.path.basename(file_path)} (retry):\n")
+                                        self.append_output("-" * 40 + "\n")
+                                        self.append_output(retry_output)
+                                        self.append_output("\n" + "=" * 50 + "\n\n")
+                                    else:
+                                        self.append_output(f"⚠️ No useful output after retry for {os.path.basename(file_path)}\n\n")
+                                else:
+                                    self.append_output(f"⚠️ No output after retry for {os.path.basename(file_path)}\n\n")
+                            except Exception as retry_e:
+                                self.append_output(f"❌ Retry failed for {os.path.basename(file_path)}: {retry_e}\n\n")
                         else:
                             self.append_output(f"⚠️ No readable output from analysis of {os.path.basename(file_path)}\n\n")
                     
@@ -779,15 +848,12 @@ class OllamaCodeCheckerGUI:
         }
         language = language_map.get(file_ext, 'Unknown')
         
-        # Ensure content is properly formatted in the prompt
-        base_prompt = f"""Analyze this {language} code file: {os.path.basename(file_path)}
+        # Create a much more direct and commanding prompt
+        base_prompt = f"""ANALYZE THIS {language.upper()} CODE:
 
-CODE TO ANALYZE:
-```{language.lower()}
 {content}
-```
 
-"""
+You must analyze the code above. Do not ask for more information - the code is right there. Analyze it now."""
         
         if analysis_type == "cleanup":
             return base_prompt + """TASK: Code Cleanup Analysis
@@ -983,7 +1049,7 @@ Provide your analysis in a clear, structured format with specific, actionable fe
                         env=env
                     )
                     
-                    stdout, _ = self.current_process.communicate(input=prompt, timeout=180)
+                    stdout, _ = self.current_process.communicate(input=prompt, timeout=300)
                     
                     if stdout:
                         # Clean up terminal control sequences first
@@ -1034,21 +1100,24 @@ Provide your analysis in a clear, structured format with specific, actionable fe
         }
         language = language_map.get(file_ext, 'Unknown')
         
-        base_prompt = f"""Fix the issues in this {language} code file: {os.path.basename(file_path)}
+        base_prompt = f"""You are an expert {language} programmer. Fix the issues in this code file.
+
+File: {os.path.basename(file_path)}
+Language: {language}
 
 ORIGINAL CODE TO FIX:
 ```{language.lower()}
 {content}
 ```
 
-Please:
-1. Identify and fix any errors, bugs, or issues
+Task: Analyze the code above and fix any issues you find:
+1. Fix errors, bugs, or issues
 2. Remove unused imports, variables, and functions
 3. Remove commented-out code
 4. Fix code style issues
 5. Improve performance where possible
 
-IMPORTANT: Return ONLY the fixed code wrapped in ```{language.lower()} code blocks. Do not include explanations or other text."""
+IMPORTANT: Return ONLY the corrected code wrapped in ```{language.lower()} code blocks. Do not include explanations or other text. The code is provided above - analyze it directly."""
         
         return base_prompt
     
@@ -1324,7 +1393,7 @@ IMPORTANT: Return ONLY the fixed code wrapped in ```{language.lower()} code bloc
                         env=env
                     )
                     
-                    stdout, _ = self.current_process.communicate(input=prompt, timeout=180)
+                    stdout, _ = self.current_process.communicate(input=prompt, timeout=300)
                     
                     if stdout:
                         # Clean up terminal control sequences first

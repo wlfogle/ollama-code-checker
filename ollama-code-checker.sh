@@ -166,21 +166,12 @@ list_available_models() {
             echo -e "${YELLOW}Other Available Models:${NC}"
             ls "$MODELS_PATH/manifests/registry.ollama.ai/library/" 2>/dev/null | grep -vE "(code|granite|deepseek)" | while read -r model_name; do
                 echo -e "  $model_name:latest"
+            done
         else
             echo -e "${YELLOW}No models manifest found. You may need to pull some models first.${NC}"
         fi
     else
         echo "$models" | while read -r model; do
-            if [[ "$model" == *"code"* ]] || [[ "$model" == *"granite"* ]] || [[ "$model" == *"deepseek"* ]]; then
-                echo -e "${GREEN}● $model${NC} (recommended for code analysis)"
-            else
-                echo -e "  $model"
-            fi
-        done
-    fi
-    echo
-    return 0
-}
             if [[ "$model" == *"code"* ]] || [[ "$model" == *"granite"* ]] || [[ "$model" == *"deepseek"* ]]; then
                 echo -e "${GREEN}● $model${NC} (recommended for code analysis)"
             else
