@@ -20,7 +20,8 @@ else
 fi
 
 # Create installation directory
-INSTALL_DIR="$HOME/.local/bin"
+# Allow customization via environment variable
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 mkdir -p "$INSTALL_DIR"
 
 # Copy main script
@@ -43,9 +44,9 @@ if ! python3 -c "import tkinter" 2>/dev/null; then
 fi
 
 # Add to PATH if needed
-if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    echo -e "${YELLOW}Adding $HOME/.local/bin to PATH...${NC}"
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+    echo -e "${YELLOW}Adding $INSTALL_DIR to PATH...${NC}"
+    echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$HOME/.bashrc"
     echo "Please run: source ~/.bashrc or start a new terminal"
 fi
 
